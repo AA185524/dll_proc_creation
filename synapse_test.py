@@ -1,4 +1,5 @@
 import os
+import csv
 from connection import connect
 
 def get_table_sql_query(schema_name):
@@ -20,63 +21,85 @@ def get_table_sql_query(schema_name):
     ORDER BY c.table_name, c.ORDINAL_POSITION asc"""
     return table_sql_query
 
-def get_view_sql_query(schema_name):
-    view_sql_query = f"""SELECT * FROM INFORMATION_SCHEMA.VIEWS
-    WHERE table_schema = '{schema_name}' 
-    ORDER BY table_name asc"""
-    return view_sql_query
-
-def get_table_ddl(schema_name, table_name, cursor):
-    ddl_query = f"""SELECT 
-        c.column_name,
-        c.data_type,
-        c.character_maximum_length,
-        c.numeric_precision,
-        c.numeric_scale,
-        c.collation_name
-    FROM INFORMATION_SCHEMA.COLUMNS c
-    WHERE c.table_schema = '{schema_name}' AND c.table_name = '{table_name}'
-    ORDER BY c.ORDINAL_POSITION asc"""
-
-    cursor.execute(ddl_query)
-    rows = cursor.fetchall()
-
-    ddl = f"CREATE EXTERNAL TABLE {schema_name}.{table_name} (\n"
-    for row in rows:
-        column_name, data_type, char_max_length, numeric_precision, numeric_scale, collation_name = row
-        column_definition = f"    {column_name} {data_type}"
-        if char_max_length is not None:
-            column_definition += f"({char_max_length})"
-        elif numeric_precision is not None:
-            column_definition += f"({numeric_precision},{numeric_scale})"
-        if collation_name is not None:
-            column_definition += f" COLLATE {collation_name}"
-        ddl += column_definition + ",\n"
-    ddl = '(\n'
-    ddl = '     DATA SOURCE = []\n'
-    ddl = '     LOCATION = []\n'
-    ddl = '     FILE_FORMAT = [SynapseParquetFormat]'
-    ddl = ddl.rstrip(",\n") + "\n);"
-    return ddl
-
-def create_table_ddl_files(schema_name, cursor):
+def export_query_result_to_csv(schema_name, cursor):
     table_sql_query = get_table_sql_query(schema_name)
     cursor.execute(table_sql_query)
-    table_names = [row[0] for row in cursor.fetchall()]
+    table_rows = cursor.fetchall()
 
-    ddl_directory = f"{schema_name}_ExternalTables_DDL"
-    os.makedirs(ddl_directory, exist_ok=True)
+    # csv_directory = f"{schema_name}_CSV_Export"
+    # os.makedirs(csv_directory, exist_ok=True)
 
-    for table_name in table_names:
-        ddl = get_table_ddl(schema_name, table_name, cursor)
-        file_path = os.path.join(ddl_directory, f"{table_name}.sql")
+    csv_file_path = f"{schema_name}_query_result.csv"
 
-        with open(file_path, "w") as ddl_file:
-            ddl_file.write(ddl)
+    with open(csv_file_path, mode='w', newline='') as csv_file:
+        csv_writer = csv.writer(csv_file)
+
+        # Write header
+        header = ['table_name', 'column_name', 'data_type', 'character_maximum_length', 'derivedcolumn', 'collation_name', 'location']
+        csv_writer.writerow(header)
+
+        # Write data
+        csv_writer.writerows(table_rows)
+
+def create_table_ddl_files_from_csv(csv_file_path):
+    with open(csv_file_path, mode='r') as csv_file:
+        csv_reader = csv.DictReader(csv_file)
+
+        current_table = None
+        current_columns = []
+
+        for row in csv_reader:
+            table_name = row['table_name']
+            column_name = row['column_name']
+            data_type = row['data_type']
+            character_length = row['character_maximum_length']
+            derived_column = row['derivedcolumn']
+            collation_name = row['collation_name']
+            location = row['location']
+
+            if current_table is None:
+                current_table = table_name
+                current_columns = []
+
+            if table_name != current_table:
+                # Process the previous table and create DDL
+                create_table_ddl(current_table, current_columns)
+
+                # Reset for the new table
+                current_table = table_name
+                current_columns = []
+
+            current_columns.append((column_name, data_type, character_length, derived_column, collation_name, location))
+
+        # Process the last table
+        create_table_ddl(current_table, current_columns)
+
+def create_table_ddl(table_name,schema_name, columns):
+    # ddl_directory = f"{table_name}_DDL"
+    # os.makedirs(ddl_directory, exist_ok=True)
+    data_source = 'hub_adle_adls2storage_dfs_core_windows_net' if schema_name[:3].lower() =='hub' else 'pub_adle_adls2storage_dfs_core_windows_net'
+
+    ddl = f"CREATE TABLE {table_name} (\n"
+    for column in columns:
+        ddl += f"    {column[3]},\n"
+    ddl = ddl.rstrip(',\n')  # Remove the trailing comma and newline
+    ddl += "\n);\n"
+    ddl += '('
+    ddl += f'    DATA SOURCE = {data_source}'
+    ddl += f'    LOCATION = '
+    ddl += '     FILE FORMAT = [SynapseParquetFormat]'
+
+    ddl_file_path = os.path.join(f"HUB_External/{table_name}_DDL.sql")
+    with open(ddl_file_path, "w") as ddl_file:
+        ddl_file.write(ddl)
+
+# Specify the path to the CSV file
+
 
 # Take input for schema
 schema_name = input('Enter Schema Name: ')
-
 # Get table SQL query and execute
 cursor = connect.cursor()
-create_table_ddl_files(schema_name, cursor)
+export_query_result_to_csv(schema_name, cursor)
+csv_file_path = 'hub_product_query_results.csv'
+create_table_ddl_files_from_csv(csv_file_path)
