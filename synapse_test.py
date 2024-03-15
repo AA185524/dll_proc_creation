@@ -179,3 +179,58 @@ with concurrent.futures.ThreadPoolExecutor(1) as executor:
 
 with concurrent.futures.ThreadPoolExecutor(1) as executor:
     executor.map(export_query_result_to_csv, schema_name)
+
+---------------------------------------------------------------------------------------
+#from config import connect_atmco
+from datetime import datetime
+import pyodbc
+import os
+connect_atmco = pyodbc.connect(Trusted_Connection= 'No',UID='aa251149@ncr.com',PWD='Iamsourpunk@2023',Authentication='ActiveDirectoryPassword',
+          DATABASE='adleprodservlessdb01',Driver='{ODBC Driver 18 for SQL Server}',Server='adle-prod-syn-ws01-ondemand.sql.azuresynapse.net',autocommit=True)
+
+def execute_sql_scripts(script_directories, log_path):
+    sep_line = '-' * 100
+    # Create a connection
+    #connection = pyodbc.connect(connection_str)
+    cursor = connect_atmco.cursor()
+    # sql_queries = []
+    # Iterate through script directories in the specified order
+    for script_directory in script_directories:
+       # Iterate through SQL script files in the current directory
+        for filename in os.listdir(script_directory):
+            if filename.endswith(".sql"):
+                file_path = os.path.join(script_directory, filename)
+                script_name = os.path.splitext(filename)[0]
+                # Read the SQL script content
+                with open(file_path, 'r',encoding='utf-8') as file:
+                    sql_script = file.read()
+                    try:
+
+                   # Execute the SQL script
+                        cursor.execute(sql_script)
+                        print(f"Script '{script_name}' executed successfully.")
+                    except Exception as e:
+                   # Log the error to a file
+                        log_error(log_path, sep_line, script_name, str(e))
+                        print(f"Error executing script '{script_name}': {str(e)}")
+   # Close the connection
+    connect_atmco.close()
+
+
+
+def log_error(log_path, sep_line, script_name, error_message):
+    current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(log_path, 'a') as log_file:
+        log_file.write(f"{sep_line}\nDate and Time: {current_datetime}\nScript: {script_name}\nError: {error_message}\n\n")
+
+
+
+external_table_dir = 'serverless1'
+views_dir = 'serverless/views_rls'
+log_file_path = 'error.log'
+
+# Specify the order of script directories
+script_directories = [external_table_dir] #views_dir
+
+execute_sql_scripts(script_directories, log_file_path)
+
